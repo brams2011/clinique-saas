@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+
+/* ── Dark mode global overrides ─────────────────────────────────────────────
+   Quand la classe "dark" est sur <html>, on redéfinit les couleurs Tailwind
+   les plus courantes pour l'ensemble de l'application.
+   html.dark a une spécificité supérieure à la classe seule (.bg-white, etc.)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Backgrounds */
+html.dark .bg-white          { background-color: rgb(17 24 39);  }  /* gray-900  */
+html.dark .bg-gray-50        { background-color: rgb(3  7  18);  }  /* gray-950  */
+html.dark .bg-gray-100       { background-color: rgb(31 41 55);  }  /* gray-800  */
+html.dark .bg-gray-200       { background-color: rgb(55 65 81);  }  /* gray-700  */
+
+/* Hover backgrounds */
+html.dark .hover\:bg-gray-50:hover  { background-color: rgb(31 41 55); }
+html.dark .hover\:bg-gray-100:hover { background-color: rgb(55 65 81); }
+
+/* Text */
+html.dark .text-gray-900 { color: rgb(249 250 251); }  /* gray-100 */
+html.dark .text-gray-800 { color: rgb(229 231 235); }  /* gray-200 */
+html.dark .text-gray-700 { color: rgb(209 213 219); }  /* gray-300 */
+html.dark .text-gray-600 { color: rgb(156 163 175); }  /* gray-400 */
+html.dark .text-gray-500 { color: rgb(107 114 128); }  /* gray-500 */
+html.dark .text-gray-400 { color: rgb(75  85  99);  }  /* gray-600 */
+
+/* Borders */
+html.dark .border-gray-100 { border-color: rgb(31 41 55); }   /* gray-800 */
+html.dark .border-gray-200 { border-color: rgb(55 65 81); }   /* gray-700 */
+html.dark .border-gray-300 { border-color: rgb(75 85 99);  }  /* gray-600 */
+
+/* Dividers */
+html.dark .divide-gray-50  > * + * { border-color: rgb(31 41 55); }
+
+/* Inputs, selects, textareas */
+html.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html.dark select,
+html.dark textarea {
+  background-color: rgb(31 41 55);   /* gray-800 */
+  color:            rgb(249 250 251); /* gray-100 */
+  border-color:     rgb(75 85 99);   /* gray-600 */
+}
+
+/* Badges / pills */
+html.dark .bg-indigo-100 { background-color: rgb(49 46 129 / 0.4); }
+html.dark .bg-purple-100 { background-color: rgb(88 28 135 / 0.4); }
+html.dark .bg-teal-100   { background-color: rgb(19 78 74  / 0.4); }
+html.dark .bg-green-100  { background-color: rgb(20 83 45  / 0.4); }
+html.dark .bg-red-50     { background-color: rgb(69 10 10  / 0.5); }
+html.dark .bg-red-100    { background-color: rgb(127 29 29 / 0.4); }
+html.dark .bg-amber-50   { background-color: rgb(78 52 2   / 0.4); }
+
+/* Alert / info boxes */
+html.dark .border-red-200   { border-color: rgb(153 27 27); }
+html.dark .border-green-200 { border-color: rgb(22 101 52); }
+html.dark .text-red-700     { color: rgb(252 165 165); }
+html.dark .text-green-700   { color: rgb(134 239 172); }
+html.dark .text-amber-600   { color: rgb(252 211 77);  }
+
+/* Table rows */
+html.dark tr.hover\:bg-gray-50:hover { background-color: rgb(31 41 55); }
+
+/* Scrollbar (webkit) */
+html.dark ::-webkit-scrollbar       { background-color: rgb(17 24 39); }
+html.dark ::-webkit-scrollbar-thumb { background-color: rgb(55 65 81); border-radius: 4px; }
