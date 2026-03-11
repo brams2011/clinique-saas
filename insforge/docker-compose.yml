@@ -70,6 +70,15 @@ services:
       SQUARE_PLAN_PRO: ${SQUARE_PLAN_PRO:-}
       SQUARE_PLAN_ENTERPRISE: ${SQUARE_PLAN_ENTERPRISE:-}
       SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
+      # Email (SMTP explicite ou Gmail OAuth2)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REFRESH_TOKEN: ${GOOGLE_REFRESH_TOKEN:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-}
     volumes:
       - storage_data:/data/storage
     depends_on:

@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ChevronLeft, Edit, Plus, Calendar, FileText, Phone, Mail, MapPin, CreditCard, AlertTriangle } from "lucide-react";
+import { ChevronLeft, Edit, Plus, Calendar, FileText, Phone, Mail, MapPin, CreditCard, AlertTriangle, Send, Check } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import {
   apiGetPatient,
   apiListAppointments,
   apiListDossiers,
   apiListStaff,
+  apiSendPortalInvite,
   type Patient,
   type ClinicAppointment,
   type Dossier,
@@ -23,7 +24,7 @@ const DOSSIER_TYPE_LABELS: Record<string, string> = {
 };
 
 export default function PatientProfile() {
-  const { token } = useAuth();
+  const { token, hasPlan } = useAuth();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
@@ -34,6 +35,25 @@ export default function PatientProfile() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("info");
   const [showDossierForm, setShowDossierForm] = useState(false);
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteSent, setInviteSent] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  async function handleSendPortalInvite() {
+    if (!token || !id || inviteSending) return;
+    setInviteSending(true);
+    setInviteError(null);
+    try {
+      await apiSendPortalInvite(token, id);
+      setInviteSent(true);
+      setTimeout(() => setInviteSent(false), 4000);
+    } catch (e) {
+      setInviteError(e instanceof Error ? e.message : "Erreur envoi");
+      setTimeout(() => setInviteError(null), 4000);
+    } finally {
+      setInviteSending(false);
+    }
+  }
 
   useEffect(() => {
     if (!token || !id) return;
@@ -113,7 +133,24 @@ export default function PatientProfile() {
           </div>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {hasPlan("enterprise") && patient.email && (
+            <button
+              onClick={handleSendPortalInvite}
+              disabled={inviteSending}
+              title={inviteError ?? undefined}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                inviteSent
+                  ? "bg-green-100 text-green-700 border border-green-200"
+                  : inviteError
+                  ? "bg-red-100 text-red-700 border border-red-200"
+                  : "border border-violet-300 text-violet-700 hover:bg-violet-50"
+              } disabled:opacity-50`}
+            >
+              {inviteSent ? <Check className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+              {inviteSent ? "Invitation envoyée !" : inviteError ? inviteError : "Inviter au portail"}
+            </button>
+          )}
           <Link
             to={`/appointments/new?patient_id=${patient.id}`}
             className="flex items-center gap-1.5 border border-gray-300 px-3 py-2 rounded-lg text-sm text-gray-700 hover:bg-gray-50"

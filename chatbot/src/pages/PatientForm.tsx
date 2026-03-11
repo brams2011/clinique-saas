@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ChevronLeft, Save } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { apiCreatePatient, apiGetPatient, apiUpdatePatient, decodeJwtSub, type Patient } from "../lib/api";
+import { apiCreatePatient, apiGetPatient, apiUpdatePatient, apiSendPortalInvite, decodeJwtSub, type Patient } from "../lib/api";
 
 type FormData = {
   first_name: string;
@@ -41,7 +41,7 @@ function Field({ label, required, children }: { label: string; required?: boolea
 const INPUT = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
 
 export default function PatientForm() {
-  const { token } = useAuth();
+  const { token, hasPlan } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEdit = Boolean(id);
@@ -107,6 +107,10 @@ export default function PatientForm() {
       } else {
         const sub = decodeJwtSub(token);
         const created = await apiCreatePatient(token, { ...data, created_by: sub ?? undefined });
+        // Auto-send portal invite if Enterprise + patient has email
+        if (hasPlan("enterprise") && created.email) {
+          apiSendPortalInvite(token, created.id).catch(() => {});
+        }
         navigate(`/patients/${created.id}`);
       }
     } catch (err) {

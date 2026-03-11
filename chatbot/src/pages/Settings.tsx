@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
-import { Save, Building2, Clock, Sun, Moon, Monitor, Mic, Copy, Check } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Save, Building2, Clock, Sun, Moon, Monitor, Mic, Copy, Check, Users, QrCode, ExternalLink, Printer } from "lucide-react";
 import { useStaff } from "../contexts/StaffContext";
 import { useTheme, type Theme } from "../contexts/ThemeContext";
 import { useClinicSettings } from "../contexts/ClinicSettingsContext";
+import { useAuth } from "../contexts/AuthContext";
 
 const INPUT = "w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500";
 
@@ -149,6 +150,7 @@ export default function Settings() {
   const { isAdmin } = useStaff();
   const { theme, setTheme } = useTheme();
   const { settings, loading, update } = useClinicSettings();
+  const { clinicId, hasPlan } = useAuth();
 
   const [form, setForm] = useState<FormData>({
     clinic_name: "", clinic_type: "", responsible_name: "", responsible_title: "",
@@ -161,6 +163,8 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [portalLinkCopied, setPortalLinkCopied] = useState(false);
+  const qrCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Sync form when context settings load
   useEffect(() => {
@@ -196,6 +200,45 @@ export default function Settings() {
     setWorkingDays((prev) =>
       prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
     );
+  }
+
+  const portalUrl = clinicId ? `${window.location.origin}/portal/login?clinic_id=${clinicId}` : "";
+
+  function copyPortalLink() {
+    if (!portalUrl) return;
+    navigator.clipboard.writeText(portalUrl).then(() => {
+      setPortalLinkCopied(true);
+      setTimeout(() => setPortalLinkCopied(false), 2000);
+    });
+  }
+
+  function drawQr() {
+    if (!portalUrl || !qrCanvasRef.current) return;
+    // Simple URL-to-QR using Google Charts API rendered in an img, fallback
+    const canvas = qrCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(portalUrl)}`;
+    img.onload = () => { ctx.drawImage(img, 0, 0, 200, 200); };
+  }
+
+  function printQr() {
+    if (!portalUrl) return;
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(`
+      <!DOCTYPE html><html><head><title>Portail Patient — QR Code</title>
+      <style>body{font-family:sans-serif;text-align:center;padding:40px}h2{color:#4f46e5}p{color:#555;font-size:14px}</style></head>
+      <body>
+        <h2>Portail Patient</h2>
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(portalUrl)}" width="250" height="250" />
+        <p style="margin-top:16px;font-size:12px;word-break:break-all">${portalUrl}</p>
+        <p>Scannez ce code QR pour accéder à votre portail patient.</p>
+        <script>window.onload=()=>{window.print();window.close()}<\/script>
+      </body></html>`);
+    win.document.close();
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -253,6 +296,78 @@ export default function Settings() {
           ))}
         </div>
       </div>
+
+      {/* Portail patient — Enterprise, admin seulement */}
+      {isAdmin && hasPlan("enterprise") && (
+        <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5 mb-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Users className="w-4 h-4 text-violet-500" />
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Portail patient</h2>
+            <span className="ml-auto text-xs font-medium px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full">Enterprise</span>
+          </div>
+
+          {/* Portal URL */}
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            Partagez ce lien avec vos patients pour qu'ils accèdent à leur portail.
+          </p>
+          <div className="flex items-center gap-2 mb-4">
+            <div className="flex-1 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-xs text-gray-700 dark:text-gray-300 font-mono truncate">
+              {portalUrl || "Chargement…"}
+            </div>
+            <button
+              type="button"
+              onClick={copyPortalLink}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors flex-shrink-0"
+            >
+              {portalLinkCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {portalLinkCopied ? "Copié !" : "Copier"}
+            </button>
+            <a
+              href={portalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 text-gray-400 hover:text-violet-600 transition-colors"
+              title="Ouvrir le portail"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
+
+          {/* QR Code */}
+          <div className="flex items-start gap-4">
+            <div className="flex flex-col items-center gap-2">
+              <canvas
+                ref={qrCanvasRef}
+                width={100}
+                height={100}
+                className="rounded-lg border border-gray-200 dark:border-gray-600"
+                onMouseEnter={drawQr}
+              />
+              <img
+                src={portalUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(portalUrl)}` : ""}
+                alt="QR code portail"
+                width={100}
+                height={100}
+                className="rounded-lg border border-gray-200 dark:border-gray-600"
+              />
+            </div>
+            <div className="flex-1">
+              <p className="text-xs font-medium text-gray-700 dark:text-gray-200 mb-1">QR code salle d'attente</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                Imprimez ce QR code et affichez-le en salle d'attente. Les patients peuvent le scanner pour accéder à leur portail.
+              </p>
+              <button
+                type="button"
+                onClick={printQr}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-violet-300 text-violet-700 rounded-lg hover:bg-violet-50 transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                Imprimer le QR code
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Agent vocal — admin seulement */}
       {isAdmin && <VoiceAgentSection

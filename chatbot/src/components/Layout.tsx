@@ -12,6 +12,8 @@ import {
   CreditCard,
   Lock,
   ShieldCheck,
+  Receipt,
+  Video,
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth, type Plan } from "../contexts/AuthContext";
@@ -25,6 +27,8 @@ const NAV_ITEMS: { to: string; label: string; icon: React.ElementType; adminOnly
   { to: "/appointments", label: "Rendez-vous",      icon: Calendar,        adminOnly: false },
   { to: "/practitioners",label: "Praticiens",        icon: Stethoscope,     adminOnly: true },
   { to: "/chat",         label: "Chat IA",           icon: MessageSquare,   adminOnly: false },
+  { to: "/invoices",              label: "Facturation",           icon: Receipt, adminOnly: true,  requiredPlan: "pro" as Plan },
+  { to: "/virtual-consultation", label: "Consultation virtuelle", icon: Video,   adminOnly: false, requiredPlan: "enterprise" as Plan },
 ];
 
 export default function Layout() {

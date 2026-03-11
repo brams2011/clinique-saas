@@ -17,7 +17,7 @@ const PLANS = [
       "1 admin + 1 praticien",
       "Support par courriel",
     ],
-    missing: ["SMS confirmation", "Dossiers patients", "Agent vocal", "Utilisateurs illimités"],
+    missing: ["SMS confirmation", "Dossiers patients", "Facturation détaillée", "Agent vocal", "Utilisateurs illimités"],
   },
   {
     id: "pro",
@@ -33,6 +33,7 @@ const PLANS = [
       "Dossiers patients complets",
       "SMS de confirmation/annulation",
       "Sync Google Calendar",
+      "Facturation détaillée (TPS/TVQ + DOCX)",
       "1 admin + 3 praticiens",
     ],
     missing: ["Agent vocal ElevenLabs", "Utilisateurs illimités"],
@@ -48,6 +49,7 @@ const PLANS = [
     badge: "Tout inclus",
     features: [
       "Tout le Pro",
+      "Facturation détaillée (TPS/TVQ + DOCX)",
       "Agent vocal IA (ElevenLabs)",
       "Utilisateurs illimités",
       "Support prioritaire",

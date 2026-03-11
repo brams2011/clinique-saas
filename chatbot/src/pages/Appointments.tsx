@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Calendar, Plus, Filter } from "lucide-react";
+import { Calendar, Plus, Filter, Video } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import {
   apiListAppointments,
@@ -199,7 +199,12 @@ export default function Appointments() {
                       {practitioner ? `Dr. ${practitioner.last_name}` : "—"}
                     </td>
                     <td className="px-5 py-3.5">
-                      <p className="text-sm text-gray-900">{formatDateTime(appt.start_time)}</p>
+                      <div className="flex items-center gap-1.5">
+                        {appt.is_virtual && (
+                          <Video className="w-3.5 h-3.5 text-violet-500 flex-shrink-0" aria-label="Consultation virtuelle" />
+                        )}
+                        <p className="text-sm text-gray-900">{formatDateTime(appt.start_time)}</p>
+                      </div>
                       <p className="text-xs text-gray-400">{formatDuration(appt.start_time, appt.end_time)}</p>
                     </td>
                     <td className="px-5 py-3.5 hidden lg:table-cell text-sm text-gray-600">
@@ -233,6 +238,15 @@ export default function Appointments() {
                               Annuler
                             </button>
                           </>
+                        )}
+                        {appt.is_virtual && (appt.status === "scheduled" || appt.status === "confirmed") && (
+                          <button
+                            onClick={() => navigate(`/virtual-consultation?appointment_id=${appt.id}`)}
+                            className="text-xs px-2 py-1 bg-violet-50 text-violet-700 rounded hover:bg-violet-100 flex items-center gap-1"
+                          >
+                            <Video className="w-3 h-3" />
+                            Rejoindre
+                          </button>
                         )}
                         <button
                           onClick={() => navigate(`/appointments/${appt.id}/edit`)}

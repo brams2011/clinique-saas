@@ -26,6 +26,39 @@ const STRIPE_PRICE_ENTERPRISE= process.env.STRIPE_PRICE_ENTERPRISE || '';
 
 const stripe = STRIPE_SECRET ? new Stripe(STRIPE_SECRET, { apiVersion: '2023-10-16' }) : null;
 
+// ─── Nodemailer + Patient JWT ──────────────────────────────────────────────────
+const nodemailer = require('nodemailer');
+const SMTP_HOST          = process.env.SMTP_HOST          || '';
+const SMTP_PORT          = parseInt(process.env.SMTP_PORT || '587');
+const SMTP_USER          = process.env.SMTP_USER          || '';
+const SMTP_PASS          = process.env.SMTP_PASS          || '';
+const GOOGLE_CLIENT_ID   = process.env.GOOGLE_CLIENT_ID   || '';
+const GOOGLE_CLIENT_SEC  = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_REFRESH_TOK = process.env.GOOGLE_REFRESH_TOKEN || '';
+const GMAIL_USER         = process.env.GOOGLE_CALENDAR_ID  || '';   // bddouk@gmail.com
+
+// Priorité : SMTP explicite → Gmail OAuth2 → pas d'envoi
+let mailer = null;
+if (SMTP_HOST && SMTP_USER) {
+  mailer = nodemailer.createTransport({
+    host: SMTP_HOST, port: SMTP_PORT,
+    auth: { user: SMTP_USER, pass: SMTP_PASS }
+  });
+} else if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SEC && GOOGLE_REFRESH_TOK && GMAIL_USER) {
+  mailer = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      type: 'OAuth2',
+      user: GMAIL_USER,
+      clientId: GOOGLE_CLIENT_ID,
+      clientSecret: GOOGLE_CLIENT_SEC,
+      refreshToken: GOOGLE_REFRESH_TOK,
+    }
+  });
+}
+const MAIL_FROM = SMTP_USER || GMAIL_USER || 'noreply@cinique.app';
+const PATIENT_JWT_SECRET = process.env.PATIENT_JWT_SECRET || JWT_SECRET;
+
 // ─── Square ───────────────────────────────────────────────────────────────────
 const { SquareClient, SquareEnvironment: SquareEnv } = require('square');
 const SQUARE_ACCESS_TOKEN    = process.env.SQUARE_ACCESS_TOKEN    || '';
@@ -49,8 +82,8 @@ if (SQUARE_PLAN_ENTERPRISE) SQUARE_PLAN_MAP[SQUARE_PLAN_ENTERPRISE] = 'enterpris
 // Features available per plan
 const PLAN_FEATURES = {
   starter:    ['chat', 'appointments'],
-  pro:        ['chat', 'appointments', 'sms', 'calendar', 'dossiers'],
-  enterprise: ['chat', 'appointments', 'sms', 'calendar', 'dossiers', 'voice'],
+  pro:        ['chat', 'appointments', 'sms', 'calendar', 'dossiers', 'billing'],
+  enterprise: ['chat', 'appointments', 'sms', 'calendar', 'dossiers', 'voice', 'billing', 'virtual', 'portal'],
 };
 
 // Max staff members per plan (including the owner/admin)
@@ -67,13 +100,14 @@ const TABLE_FEATURE_MAP = {
   clinic_appointments: 'appointments',
   clinic_patients:     'appointments',
   clinic_dossiers:     'dossiers',
+  clinic_invoices:     'billing',
 };
 
 // Tables that are scoped per clinic (auto-inject clinic_id)
 // Note: chat_messages has no clinic_id column — it is isolated via conversation_id FK
 const CLINIC_SCOPED_TABLES = new Set([
   'clinic_staff', 'clinic_patients', 'clinic_appointments', 'clinic_dossiers',
-  'clinic_settings', 'chat_conversations', 'logs',
+  'clinic_settings', 'chat_conversations', 'logs', 'clinic_invoices',
 ]);
 
 fs.mkdirSync(STORAGE_PATH, { recursive: true });
@@ -112,6 +146,27 @@ async function makeTokens(userId, email, clinicId, plan, role) {
   const expiry = payload.is_super_admin ? 28800 : JWT_EXPIRY;
   const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: expiry });
   return { accessToken, refreshToken: uuidv4() };
+}
+
+function makePatientToken(patientId, clinicId) {
+  return jwt.sign(
+    { sub: patientId, patient_id: patientId, clinic_id: clinicId, role: 'patient' },
+    PATIENT_JWT_SECRET,
+    { expiresIn: 7200 }
+  );
+}
+
+function requirePatientAuth(req, res, next) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  try {
+    const decoded = jwt.verify(token, PATIENT_JWT_SECRET);
+    if (decoded.role !== 'patient') throw new Error('not a patient token');
+    req.patientId = decoded.patient_id;
+    req.clinicId  = decoded.clinic_id;
+    next();
+  } catch {
+    res.status(401).json({ error: 'Unauthorized' });
+  }
 }
 
 function requireAuth(req, res, next) {
@@ -442,6 +497,173 @@ app.use('/api/database/records', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('PostgREST proxy:', e.message);
     return res.status(502).json({ error: 'Base de données inaccessible' });
+  }
+});
+
+// ─── Facturation — Numéro automatique ─────────────────────────────────────────
+
+app.get('/api/facturation/next-number', requireAuth, requireFeature('billing'), async (req, res) => {
+  try {
+    const year = new Date().getFullYear();
+    const { rows } = await pool.query(
+      "SELECT COUNT(*) FROM clinic_invoices WHERE clinic_id=$1 AND numero LIKE $2",
+      [req.clinicId, `INV-${year}-%`]
+    );
+    const seq = parseInt(rows[0].count) + 1;
+    return res.json({ numero: `INV-${year}-${String(seq).padStart(4, '0')}` });
+  } catch (e) {
+    console.error('Next invoice number:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Facturation — Génération DOCX ────────────────────────────────────────────
+
+app.post('/api/facturation/:id/docx', requireAuth, requireFeature('billing'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows: invRows } = await pool.query(
+      'SELECT * FROM clinic_invoices WHERE id=$1 AND clinic_id=$2',
+      [id, req.clinicId]
+    );
+    if (!invRows[0]) return res.status(404).json({ error: 'Facture introuvable' });
+    const inv = invRows[0];
+
+    const { rows: settRows } = await pool.query(
+      'SELECT * FROM clinic_settings WHERE clinic_id=$1', [req.clinicId]
+    );
+    const cs = settRows[0] || {};
+
+    const {
+      Document, Paragraph, Table, TableRow, TableCell,
+      AlignmentType, WidthType, BorderStyle,
+      TextRun, Packer, ShadingType,
+    } = require('docx');
+
+    const fmt = (n) => `${parseFloat(n || 0).toFixed(2)} $`;
+    const lignes = Array.isArray(inv.lignes) ? inv.lignes : [];
+
+    const borderNone = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+    const cellBorders = { top: borderNone, bottom: borderNone, left: borderNone, right: borderNone };
+
+    function sectionTitle(text) {
+      return new Paragraph({
+        children: [new TextRun({ text, bold: true, size: 22, color: '1E40AF' })],
+        spacing: { before: 200, after: 100 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '3B82F6' } },
+      });
+    }
+    function row2(label, value) {
+      return new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: label, bold: true, size: 18 })] })], width: { size: 30, type: WidthType.PERCENTAGE }, borders: cellBorders }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: value || '—', size: 18 })] })], width: { size: 70, type: WidthType.PERCENTAGE }, borders: cellBorders }),
+        ],
+      });
+    }
+    function infoTable(rows2) {
+      return new Table({ rows: rows2, width: { size: 100, type: WidthType.PERCENTAGE }, borders: { top: borderNone, bottom: borderNone, left: borderNone, right: borderNone, insideH: borderNone, insideV: borderNone } });
+    }
+
+    // Lignes d'actes header
+    const acteHeaderRow = new TableRow({
+      children: ['Code', 'Description', 'Qté', 'Prix unitaire', 'Montant'].map(h =>
+        new TableCell({
+          children: [new Paragraph({ children: [new TextRun({ text: h, bold: true, size: 18, color: 'FFFFFF' })], alignment: AlignmentType.CENTER })],
+          shading: { type: ShadingType.CLEAR, fill: '1E40AF' },
+        })
+      ),
+    });
+    const acteRows = lignes.map(l => new TableRow({
+      children: [
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: l.code || '', size: 18 })] })] }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: l.description || '', size: 18 })] })] }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(l.quantite ?? ''), size: 18 })] }), ], alignment: AlignmentType.CENTER }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: fmt(l.prix_unitaire), size: 18 })] }), ], alignment: AlignmentType.RIGHT }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: fmt(l.montant), size: 18 })] }), ], alignment: AlignmentType.RIGHT }),
+      ],
+    }));
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: [
+          // ── En-tête clinique ──
+          new Paragraph({ children: [new TextRun({ text: cs.clinic_name || 'Clinique', bold: true, size: 36, color: '1E40AF' })], alignment: AlignmentType.CENTER }),
+          new Paragraph({ children: [new TextRun({ text: [cs.address, cs.city, cs.postal_code].filter(Boolean).join(', ') || '', size: 18, color: '6B7280' })], alignment: AlignmentType.CENTER }),
+          new Paragraph({ children: [new TextRun({ text: [cs.phone ? `Tél: ${cs.phone}` : '', cs.email || ''].filter(Boolean).join('  |  '), size: 18, color: '6B7280' })], alignment: AlignmentType.CENTER }),
+          new Paragraph({ text: '', spacing: { after: 100 } }),
+
+          // ── Titre facture ──
+          new Paragraph({ children: [new TextRun({ text: `FACTURE ${inv.numero}`, bold: true, size: 48 })], alignment: AlignmentType.CENTER, spacing: { after: 60 } }),
+          new Paragraph({ children: [new TextRun({ text: `Date de visite : ${inv.date_visite || '—'}   |   Échéance : ${inv.date_echeance || '—'}`, size: 18, color: '6B7280' })], alignment: AlignmentType.CENTER, spacing: { after: 200 } }),
+
+          // ── Patient ──
+          sectionTitle('Informations patient'),
+          infoTable([
+            row2('Nom', inv.patient_nom),
+            row2('N° RAMQ', inv.patient_ramq),
+            row2('N° dossier', inv.patient_dossier),
+            row2('Téléphone', inv.patient_telephone),
+            row2('Adresse', inv.patient_adresse),
+          ]),
+
+          // ── Médecin & assurance ──
+          sectionTitle('Médecin & assurance'),
+          infoTable([
+            row2('Médecin', inv.medecin_nom),
+            row2('N° licence', inv.medecin_licence),
+            row2('Spécialité', inv.medecin_specialite),
+            row2('Assureur', inv.assureur),
+            row2('N° police', inv.no_police),
+            row2('N° réclamation', inv.no_reclamation),
+          ]),
+
+          // ── Actes ──
+          sectionTitle('Actes médicaux'),
+          ...(lignes.length > 0
+            ? [new Table({ rows: [acteHeaderRow, ...acteRows], width: { size: 100, type: WidthType.PERCENTAGE } })]
+            : [new Paragraph({ children: [new TextRun({ text: 'Aucun acte enregistré.', size: 18, italics: true })] })]
+          ),
+
+          // ── Totaux ──
+          sectionTitle('Résumé financier'),
+          infoTable([
+            row2('Sous-total', fmt(inv.sous_total)),
+            row2('Remises', `- ${fmt(inv.remises)}`),
+            row2('Couverture RAMQ', `- ${fmt(inv.ramq_couverture)}`),
+            row2('Couverture assurance', `- ${fmt(inv.assurance_couverture)}`),
+            row2('TPS (5%)', fmt(inv.tps)),
+            row2('TVQ (9.975%)', fmt(inv.tvq)),
+            row2('Acompte', `- ${fmt(inv.acompte)}`),
+            row2('TOTAL DÛ', fmt(inv.total)),
+          ]),
+
+          // ── Notes & diagnostic ──
+          ...(inv.notes || inv.diagnostic_cim10 ? [
+            sectionTitle('Notes'),
+            ...(inv.diagnostic_cim10 ? [new Paragraph({ children: [new TextRun({ text: `Diagnostic CIM-10 : ${inv.diagnostic_cim10}`, size: 18, italics: true })] })] : []),
+            ...(inv.notes ? [new Paragraph({ children: [new TextRun({ text: inv.notes, size: 18 })] })] : []),
+          ] : []),
+
+          // ── Signature ──
+          new Paragraph({ text: '', spacing: { before: 400 } }),
+          new Paragraph({ children: [new TextRun({ text: 'Signature du médecin : ____________________________', size: 18 })], spacing: { after: 60 } }),
+          new Paragraph({ children: [new TextRun({ text: 'Date : ____________________', size: 18 })] }),
+        ],
+      }],
+    });
+
+    const buffer = await Packer.toBuffer(doc);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'Content-Disposition': `attachment; filename="facture-${inv.numero}.docx"`,
+      'Content-Length': buffer.length,
+    });
+    return res.send(buffer);
+  } catch (e) {
+    console.error('DOCX generation:', e.message);
+    return res.status(500).json({ error: 'Erreur génération DOCX : ' + e.message });
   }
 });
 
@@ -827,6 +1049,315 @@ app.get('/api/storage/buckets/:bucket/objects/*', requireAuth, (req, res) => {
     filePath = path.join(STORAGE_PATH, bucket, key);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Fichier introuvable' });
   return res.sendFile(filePath);
+});
+
+// ─── Patient Portal ───────────────────────────────────────────────────────────
+
+// POST /api/portal/auth/request-otp
+app.post('/api/portal/auth/request-otp', async (req, res) => {
+  const { email, clinic_id } = req.body || {};
+  if (!email || !clinic_id) return res.status(422).json({ error: 'email et clinic_id requis' });
+
+  try {
+    // Check clinic plan
+    const subRow = await pool.query(
+      'SELECT plan FROM subscriptions WHERE clinic_id=$1 LIMIT 1',
+      [clinic_id]
+    );
+    const plan = subRow.rows[0]?.plan || 'starter';
+    if (!(PLAN_FEATURES[plan] || []).includes('portal')) {
+      return res.status(403).json({ error: 'upgrade_required', message: 'Le portail patient nécessite le forfait Enterprise.' });
+    }
+
+    // Find patient by email in this clinic
+    const patRow = await pool.query(
+      'SELECT id FROM clinic_patients WHERE email=$1 AND clinic_id=$2 LIMIT 1',
+      [email.toLowerCase().trim(), clinic_id]
+    );
+    if (!patRow.rows[0]) return res.status(404).json({ error: 'Patient introuvable' });
+    const patientId = patRow.rows[0].id;
+
+    // Invalidate previous OTPs
+    await pool.query(
+      'UPDATE patient_auth_tokens SET used=true WHERE patient_id=$1 AND clinic_id=$2 AND used=false',
+      [patientId, clinic_id]
+    );
+
+    // Generate 6-digit OTP
+    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await pool.query(
+      'INSERT INTO patient_auth_tokens (id, patient_id, clinic_id, otp_code, expires_at) VALUES ($1,$2,$3,$4,$5)',
+      [uuidv4(), patientId, clinic_id, otpCode, expiresAt]
+    );
+
+    if (mailer) {
+      await mailer.sendMail({
+        from: MAIL_FROM,
+        to: email,
+        subject: 'Votre code de connexion au portail patient',
+        text: `Votre code OTP : ${otpCode}\n\nValide 10 minutes. Ne le partagez pas.`,
+        html: `<p>Votre code de connexion : <strong style="font-size:24px">${otpCode}</strong></p><p>Valide 10 minutes.</p>`,
+      });
+      return res.json({ sent: true });
+    } else {
+      // Dev mode: return OTP in response
+      return res.json({ sent: true, dev_otp: otpCode });
+    }
+  } catch (e) {
+    console.error('Portal request-otp:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/portal/auth/verify-otp
+app.post('/api/portal/auth/verify-otp', async (req, res) => {
+  const { email, clinic_id, otp } = req.body || {};
+  if (!email || !clinic_id || !otp) return res.status(422).json({ error: 'email, clinic_id et otp requis' });
+
+  try {
+    const patRow = await pool.query(
+      'SELECT id FROM clinic_patients WHERE email=$1 AND clinic_id=$2 LIMIT 1',
+      [email.toLowerCase().trim(), clinic_id]
+    );
+    if (!patRow.rows[0]) return res.status(404).json({ error: 'Patient introuvable' });
+    const patientId = patRow.rows[0].id;
+
+    const tokenRow = await pool.query(
+      `SELECT id FROM patient_auth_tokens
+       WHERE patient_id=$1 AND clinic_id=$2 AND otp_code=$3 AND used=false AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`,
+      [patientId, clinic_id, String(otp).trim()]
+    );
+    if (!tokenRow.rows[0]) return res.status(401).json({ error: 'Code invalide ou expiré' });
+
+    await pool.query('UPDATE patient_auth_tokens SET used=true WHERE id=$1', [tokenRow.rows[0].id]);
+
+    const token = makePatientToken(patientId, clinic_id);
+    return res.json({ token, patient_id: patientId });
+  } catch (e) {
+    console.error('Portal verify-otp:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/portal/appointments
+app.get('/api/portal/appointments', requirePatientAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, start_time, end_time, type, status, reason, is_virtual, virtual_meeting_url
+       FROM clinic_appointments
+       WHERE patient_id=$1 AND clinic_id=$2
+       ORDER BY start_time DESC`,
+      [req.patientId, req.clinicId]
+    );
+    return res.json(rows);
+  } catch (e) {
+    console.error('Portal appointments:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/portal/dossiers
+app.get('/api/portal/dossiers', requirePatientAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, type, title, content, created_at
+       FROM clinic_dossiers
+       WHERE patient_id=$1 AND clinic_id=$2 AND (is_confidential IS NULL OR is_confidential=false)
+       ORDER BY created_at DESC`,
+      [req.patientId, req.clinicId]
+    );
+    return res.json(rows);
+  } catch (e) {
+    console.error('Portal dossiers:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/portal/invoices
+app.get('/api/portal/invoices', requirePatientAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, numero, statut, date_visite, total, created_at
+       FROM clinic_invoices
+       WHERE patient_id=$1 AND clinic_id=$2
+       ORDER BY created_at DESC`,
+      [req.patientId, req.clinicId]
+    );
+    return res.json(rows);
+  } catch (e) {
+    console.error('Portal invoices:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/portal/profile — patient updates own phone/email
+app.patch('/api/portal/profile', requirePatientAuth, async (req, res) => {
+  const { phone, email } = req.body || {};
+  const updates = [];
+  const values = [];
+  if (phone !== undefined) { updates.push(`phone=$${updates.length + 1}`); values.push(phone); }
+  if (email !== undefined) { updates.push(`email=$${updates.length + 1}`); values.push(email.toLowerCase().trim()); }
+  if (!updates.length) return res.status(422).json({ error: 'Rien à mettre à jour' });
+  values.push(req.patientId, req.clinicId);
+  try {
+    const { rows } = await pool.query(
+      `UPDATE clinic_patients SET ${updates.join(', ')} WHERE id=$${values.length - 1} AND clinic_id=$${values.length} RETURNING id, first_name, last_name, email, phone`,
+      values
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Patient introuvable' });
+    return res.json(rows[0]);
+  } catch (e) {
+    console.error('Portal profile:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/portal/profile — get own patient info
+app.get('/api/portal/profile', requirePatientAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, first_name, last_name, email, phone, date_of_birth, gender, address, city, postal_code FROM clinic_patients WHERE id=$1 AND clinic_id=$2',
+      [req.patientId, req.clinicId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Patient introuvable' });
+    return res.json(rows[0]);
+  } catch (e) {
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/portal/send-invite — staff sends portal invite email to patient
+app.post('/api/portal/send-invite', requireAuth, requireFeature('portal'), async (req, res) => {
+  const { patient_id } = req.body || {};
+  if (!patient_id) return res.status(422).json({ error: 'patient_id requis' });
+  try {
+    const patRow = await pool.query(
+      'SELECT first_name, last_name, email FROM clinic_patients WHERE id=$1 AND clinic_id=$2',
+      [patient_id, req.clinicId]
+    );
+    if (!patRow.rows[0]) return res.status(404).json({ error: 'Patient introuvable' });
+    const { first_name, last_name, email } = patRow.rows[0];
+    if (!email) return res.status(422).json({ error: 'Ce patient n\'a pas d\'adresse email' });
+
+    const portalUrl = `${APP_URL}/portal/login?clinic_id=${req.clinicId}`;
+
+    if (mailer) {
+      await mailer.sendMail({
+        from: MAIL_FROM,
+        to: email,
+        subject: 'Accès à votre portail patient',
+        text: `Bonjour ${first_name} ${last_name},\n\nVotre portail patient est disponible ici :\n${portalUrl}\n\nConnectez-vous avec votre adresse email. Un code de vérification vous sera envoyé.\n\nCordialement,\nVotre clinique`,
+        html: `<p>Bonjour <strong>${first_name} ${last_name}</strong>,</p>
+<p>Votre portail patient est maintenant disponible. Vous pouvez y consulter vos rendez-vous, dossiers médicaux et factures.</p>
+<p><a href="${portalUrl}" style="display:inline-block;padding:12px 24px;background:#4f46e5;color:white;text-decoration:none;border-radius:8px;font-weight:bold;">Accéder à mon portail</a></p>
+<p>Ou copiez ce lien : ${portalUrl}</p>
+<p>Pour vous connecter, entrez simplement votre adresse email. Un code de vérification à usage unique vous sera envoyé.</p>`,
+      });
+      return res.json({ sent: true });
+    } else {
+      return res.json({ sent: false, portal_url: portalUrl, dev: true });
+    }
+  } catch (e) {
+    console.error('Portal send-invite:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/portal/send-appointment-email — staff notifies patient of new/updated appointment
+app.post('/api/portal/send-appointment-email', requireAuth, requireFeature('portal'), async (req, res) => {
+  const { appointment_id } = req.body || {};
+  if (!appointment_id) return res.status(422).json({ error: 'appointment_id requis' });
+
+  try {
+    // Fetch appointment + patient + clinic name
+    const apptRow = await pool.query(
+      `SELECT a.start_time, a.end_time, a.type, a.reason, a.is_virtual,
+              p.first_name, p.last_name, p.email,
+              cs.clinic_name
+         FROM clinic_appointments a
+         JOIN clinic_patients p ON p.id = a.patient_id
+         LEFT JOIN clinic_settings cs ON cs.clinic_id = a.clinic_id
+        WHERE a.id=$1 AND a.clinic_id=$2`,
+      [appointment_id, req.clinicId]
+    );
+    if (!apptRow.rows[0]) return res.status(404).json({ error: 'Rendez-vous introuvable' });
+
+    const { start_time, end_time, type, reason, is_virtual,
+            first_name, last_name, email, clinic_name } = apptRow.rows[0];
+
+    if (!email) return res.status(422).json({ error: 'Ce patient n\'a pas d\'adresse email' });
+
+    const clinicLabel = clinic_name || 'Votre clinique';
+    const portalUrl   = `${APP_URL}/portal/login?clinic_id=${req.clinicId}`;
+
+    const dateOptions = { timeZone: 'America/Toronto', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    const timeOptions = { timeZone: 'America/Toronto', hour: '2-digit', minute: '2-digit' };
+    const dateStr = new Date(start_time).toLocaleDateString('fr-CA', dateOptions);
+    const timeStart = new Date(start_time).toLocaleTimeString('fr-CA', timeOptions);
+    const timeEnd   = new Date(end_time).toLocaleTimeString('fr-CA', timeOptions);
+
+    const typeLabel = {
+      consultation: 'Consultation', bilan: 'Bilan', suivi: 'Suivi',
+      urgence: 'Urgence', preventif: 'Préventif', autre: 'Autre'
+    }[type] || type || 'Consultation';
+
+    const virtualNote = is_virtual
+      ? `<p style="background:#f3f4ff;border:1px solid #e0e0ff;border-radius:8px;padding:12px;margin:16px 0;color:#4f46e5">
+           📹 <strong>Consultation virtuelle</strong> — un lien de connexion sera disponible dans votre portail patient.
+         </p>` : '';
+
+    const reasonNote = reason ? `<p style="color:#555;font-size:14px">Motif : ${reason}</p>` : '';
+
+    const html = `
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#333">
+  <div style="background:#4f46e5;border-radius:12px 12px 0 0;padding:20px 24px">
+    <h1 style="color:white;margin:0;font-size:20px">${clinicLabel}</h1>
+    <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:14px">Confirmation de rendez-vous</p>
+  </div>
+  <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;padding:24px">
+    <p>Bonjour <strong>${first_name} ${last_name}</strong>,</p>
+    <p>Votre rendez-vous a été confirmé :</p>
+
+    <div style="background:#f9fafb;border-radius:8px;padding:16px;margin:16px 0">
+      <p style="margin:0 0 8px;font-size:15px"><strong>📅 ${dateStr}</strong></p>
+      <p style="margin:0 0 6px;color:#555;font-size:14px">🕐 ${timeStart} — ${timeEnd}</p>
+      <p style="margin:0;color:#555;font-size:14px">🩺 ${typeLabel}</p>
+      ${reasonNote}
+    </div>
+
+    ${virtualNote}
+
+    <div style="background:#f0f0ff;border-radius:8px;padding:16px;margin:16px 0;text-align:center">
+      <p style="margin:0 0 12px;font-size:14px;color:#4f46e5;font-weight:600">Accédez à votre portail patient</p>
+      <p style="margin:0 0 12px;font-size:13px;color:#666">Consultez vos rendez-vous, dossiers médicaux et factures en ligne.</p>
+      <a href="${portalUrl}" style="display:inline-block;padding:12px 28px;background:#4f46e5;color:white;text-decoration:none;border-radius:8px;font-weight:bold;font-size:14px">
+        Accéder à mon portail
+      </a>
+    </div>
+
+    <p style="font-size:12px;color:#999;margin-top:16px">Pour vous connecter, utilisez simplement votre adresse email. Un code de vérification vous sera envoyé.</p>
+    <hr style="border:none;border-top:1px solid #eee;margin:16px 0">
+    <p style="font-size:12px;color:#aaa;text-align:center">${clinicLabel}</p>
+  </div>
+</body></html>`;
+
+    const text = `Bonjour ${first_name} ${last_name},\n\nVotre rendez-vous est confirmé :\n- Date : ${dateStr}\n- Heure : ${timeStart} — ${timeEnd}\n- Type : ${typeLabel}\n${reason ? `- Motif : ${reason}\n` : ''}\nAccédez à votre portail patient : ${portalUrl}\n\nCordialement,\n${clinicLabel}`;
+
+    if (mailer) {
+      await mailer.sendMail({ from: MAIL_FROM, to: email, subject: `Confirmation de rendez-vous — ${clinicLabel}`, text, html });
+      return res.json({ sent: true });
+    } else {
+      return res.json({ sent: false, portal_url: portalUrl, dev: true,
+        preview: { to: email, subject: `Confirmation de rendez-vous — ${clinicLabel}`, date: dateStr, time: timeStart } });
+    }
+  } catch (e) {
+    console.error('Portal send-appointment-email:', e.message);
+    return res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // ─── Secrets ──────────────────────────────────────────────────────────────────

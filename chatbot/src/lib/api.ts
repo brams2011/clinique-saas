@@ -41,6 +41,20 @@ export function clearStoredTokens() {
   localStorage.removeItem(LS_REFRESH);
 }
 
+// ─── Patient portal token storage ────────────────────────────────────────────
+
+const LS_PATIENT_TOKEN = "cinique_patient_token";
+
+export function getStoredPatientToken(): string | null {
+  return localStorage.getItem(LS_PATIENT_TOKEN);
+}
+export function setStoredPatientToken(token: string) {
+  localStorage.setItem(LS_PATIENT_TOKEN, token);
+}
+export function clearStoredPatientToken() {
+  localStorage.removeItem(LS_PATIENT_TOKEN);
+}
+
 // ─── Safe JSON parse (handles empty / 204 responses) ─────────────────────────
 
 async function safeJson<T>(res: Response): Promise<T> {
@@ -353,6 +367,112 @@ export async function apiUploadImage(
   return { key };
 }
 
+// ─── Facturation ──────────────────────────────────────────────────────────────
+
+export interface InvoiceLigne {
+  code: string;
+  description: string;
+  quantite: number;
+  prix_unitaire: number;
+  montant: number;
+}
+
+export interface Invoice {
+  id: string;
+  clinic_id: string;
+  patient_id: string | null;
+  appointment_id: string | null;
+  numero: string;
+  statut: "en_attente" | "payee" | "annulee";
+  patient_nom: string | null;
+  patient_ramq: string | null;
+  patient_dossier: string | null;
+  patient_telephone: string | null;
+  patient_email: string | null;
+  patient_adresse: string | null;
+  medecin_nom: string | null;
+  medecin_licence: string | null;
+  medecin_specialite: string | null;
+  date_visite: string | null;
+  date_echeance: string | null;
+  assureur: string | null;
+  no_police: string | null;
+  no_reclamation: string | null;
+  lignes: InvoiceLigne[];
+  sous_total: number;
+  remises: number;
+  ramq_couverture: number;
+  assurance_couverture: number;
+  tps: number;
+  tvq: number;
+  acompte: number;
+  total: number;
+  notes: string | null;
+  diagnostic_cim10: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function apiListInvoices(
+  token: string,
+  filters?: { statut?: string }
+): Promise<Invoice[]> {
+  let path = "clinic_invoices?order=created_at.desc";
+  if (filters?.statut) path += `&statut=eq.${encodeURIComponent(filters.statut)}`;
+  return clinicFetch<Invoice[]>(token, path);
+}
+
+export async function apiGetInvoice(token: string, id: string): Promise<Invoice> {
+  const rows = await clinicFetch<Invoice[]>(token, `clinic_invoices?id=eq.${id}`);
+  if (!rows[0]) throw new Error("Facture introuvable");
+  return rows[0];
+}
+
+export async function apiCreateInvoice(token: string, data: Partial<Invoice>): Promise<Invoice> {
+  return clinicPost<Invoice>(token, "clinic_invoices", data);
+}
+
+export async function apiUpdateInvoice(
+  token: string,
+  id: string,
+  data: Partial<Invoice>
+): Promise<Invoice> {
+  return clinicPatch<Invoice>(token, `clinic_invoices?id=eq.${id}`, data);
+}
+
+export async function apiDeleteInvoice(token: string, id: string): Promise<void> {
+  await apiFetch(`${INSFORGE_URL}/api/database/records/clinic_invoices?id=eq.${id}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
+export async function apiGetNextInvoiceNumber(token: string): Promise<string> {
+  const data = await apiJSON<{ numero: string }>(
+    `${INSFORGE_URL}/api/facturation/next-number`,
+    { headers: authHeaders(token) }
+  );
+  return data.numero;
+}
+
+export async function apiDownloadInvoiceDocx(token: string, id: string, numero: string): Promise<void> {
+  const res = await apiFetch(`${INSFORGE_URL}/api/facturation/${id}/docx`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `facture-${numero}.docx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function fetchImageAsBlob(token: string, key: string): Promise<string> {
   const res = await fetch(
     `${INSFORGE_URL}/api/storage/buckets/chat-images/objects/${key}`,
@@ -414,6 +534,38 @@ export interface ClinicAppointment {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  is_virtual: boolean;
+  virtual_meeting_url: string | null;
+}
+
+// ─── Patient Portal types ─────────────────────────────────────────────────────
+
+export interface PortalAppointment {
+  id: string;
+  start_time: string;
+  end_time: string;
+  type: string;
+  status: string;
+  reason: string | null;
+  is_virtual: boolean;
+  virtual_meeting_url: string | null;
+}
+
+export interface PortalDossier {
+  id: string;
+  type: string;
+  title: string;
+  content: string | null;
+  created_at: string;
+}
+
+export interface PortalInvoice {
+  id: string;
+  numero: string;
+  statut: string;
+  date_visite: string | null;
+  total: number;
+  created_at: string;
 }
 
 export interface Dossier {
@@ -688,4 +840,129 @@ export async function apiSyncClinicCalendar(
   } catch {
     return {};
   }
+}
+
+// ─── Patient Portal API ───────────────────────────────────────────────────────
+
+export async function apiPortalRequestOtp(
+  email: string,
+  clinicId: string
+): Promise<{ sent: boolean; dev_otp?: string }> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/auth/request-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, clinic_id: clinicId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Erreur serveur");
+  }
+  return res.json();
+}
+
+export async function apiPortalVerifyOtp(
+  email: string,
+  clinicId: string,
+  otp: string
+): Promise<{ token: string; patient_id: string }> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/auth/verify-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, clinic_id: clinicId, otp }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Code invalide");
+  }
+  return res.json();
+}
+
+export async function apiPortalAppointments(token: string): Promise<PortalAppointment[]> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/appointments`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Erreur chargement rendez-vous");
+  return res.json();
+}
+
+export async function apiPortalDossiers(token: string): Promise<PortalDossier[]> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/dossiers`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Erreur chargement dossiers");
+  return res.json();
+}
+
+export async function apiPortalInvoices(token: string): Promise<PortalInvoice[]> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/invoices`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Erreur chargement factures");
+  return res.json();
+}
+
+export interface PortalProfile {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  phone: string | null;
+  date_of_birth: string | null;
+  gender: string | null;
+  address: string | null;
+  city: string | null;
+  postal_code: string | null;
+}
+
+export async function apiPortalGetProfile(token: string): Promise<PortalProfile> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/profile`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Erreur chargement profil");
+  return res.json();
+}
+
+export async function apiPortalUpdateProfile(
+  token: string,
+  data: { phone?: string; email?: string }
+): Promise<PortalProfile> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/profile`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Erreur mise à jour profil");
+  }
+  return res.json();
+}
+
+export async function apiSendPortalInvite(
+  token: string,
+  patientId: string
+): Promise<{ sent: boolean; portal_url?: string; dev?: boolean }> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/send-invite`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ patient_id: patientId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Erreur envoi invitation");
+  }
+  return res.json();
+}
+
+export async function apiSendAppointmentEmail(
+  token: string,
+  appointmentId: string
+): Promise<{ sent: boolean; portal_url?: string; dev?: boolean }> {
+  const res = await fetch(`${INSFORGE_URL}/api/portal/send-appointment-email`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ appointment_id: appointmentId }),
+  });
+  if (!res.ok) return { sent: false };
+  return res.json();
 }

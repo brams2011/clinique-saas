@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ChevronLeft, Save, Search } from "lucide-react";
+import { ChevronLeft, Save, Search, Video } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useClinicSettings } from "../contexts/ClinicSettingsContext";
 import {
@@ -12,6 +12,7 @@ import {
   apiUpdateAppointment,
   apiSyncClinicCalendar,
   apiSmsConfirm,
+  apiSendAppointmentEmail,
   decodeJwtSub,
   type Patient,
   type ClinicStaff,
@@ -59,7 +60,7 @@ const DAY_LABELS: Record<string, string> = {
 };
 
 export default function AppointmentForm() {
-  const { token } = useAuth();
+  const { token, hasPlan } = useAuth();
   const { settings } = useClinicSettings();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -81,6 +82,7 @@ export default function AppointmentForm() {
     type: "consultation",
     reason: "",
     notes: "",
+    is_virtual: false,
   });
 
   const [smsPhone, setSmsPhone] = useState("");
@@ -112,6 +114,7 @@ export default function AppointmentForm() {
             type: appt.type,
             reason: appt.reason ?? "",
             notes: appt.notes ?? "",
+            is_virtual: appt.is_virtual ?? false,
           });
           if (pat) setPatientSearch(`${pat.first_name} ${pat.last_name}`);
         });
@@ -225,6 +228,7 @@ export default function AppointmentForm() {
           type: form.type,
           reason: form.reason || null,
           notes: form.notes || null,
+          is_virtual: form.is_virtual,
         });
         // Update Google Calendar event in background (non-blocking)
         apiSyncClinicCalendar(token, {
@@ -251,7 +255,14 @@ export default function AppointmentForm() {
           reason: form.reason || null,
           notes: form.notes || null,
           created_by: sub ?? undefined,
+          is_virtual: form.is_virtual,
         });
+        // If virtual, set the meeting URL
+        if (form.is_virtual) {
+          apiUpdateAppointment(token, created.id, {
+            virtual_meeting_url: `https://meet.jit.si/cinique-${created.id}`,
+          }).catch(() => {});
+        }
         // Create Google Calendar event in background (non-blocking)
         apiSyncClinicCalendar(token, {
           action: "create",
@@ -265,11 +276,22 @@ export default function AppointmentForm() {
             apiUpdateAppointment(token, created.id, { google_event_id: cal.event_id }).catch(() => {});
           }
         }).catch(() => {});
+        // Send appointment confirmation email with portal link (Enterprise + patient has email)
+        if (hasPlan("enterprise") && patient?.email) {
+          apiSendAppointmentEmail(token, created.id).catch(() => {});
+        }
         // Send SMS confirmation if phone is available
         if (smsPhone) {
+          // Normalize to E.164 — if 10 digits (North America), prepend +1
+          const rawPhone = smsPhone.replace(/[\s\-().]/g, "");
+          const e164Phone = /^\+/.test(rawPhone)
+            ? rawPhone
+            : rawPhone.length === 10
+            ? `+1${rawPhone}`
+            : `+${rawPhone}`;
           apiSmsConfirm(token, {
             patient_name: patient ? `${patient.first_name} ${patient.last_name}` : "Patient",
-            patient_phone: smsPhone,
+            patient_phone: e164Phone,
             start_time: startTime.toISOString(),
           }).catch(() => {});
         }
@@ -420,6 +442,29 @@ export default function AppointmentForm() {
           <Field label="Notes internes">
             <textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={3} className={`${INPUT} resize-none`} placeholder="Notes pour le praticien..." />
           </Field>
+
+          {hasPlan("enterprise") && (
+            <div className="flex items-center justify-between p-4 bg-violet-50 border border-violet-200 rounded-xl">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-violet-100 rounded-lg flex items-center justify-center">
+                  <Video className="w-5 h-5 text-violet-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Consultation par vidéo</p>
+                  <p className="text-xs text-gray-500">Jitsi Meet — aucun logiciel requis</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.is_virtual}
+                onClick={() => setForm((f) => ({ ...f, is_virtual: !f.is_virtual }))}
+                className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 ${form.is_virtual ? "bg-violet-600" : "bg-gray-300"}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.is_virtual ? "translate-x-5" : "translate-x-0"}`} />
+              </button>
+            </div>
+          )}
         </div>
 
         {error && (
