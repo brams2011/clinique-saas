@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Save, Building2, Clock, Sun, Moon, Monitor, Mic, Copy, Check, Users, QrCode, ExternalLink, Printer } from "lucide-react";
+import { Save, Building2, Clock, Sun, Moon, Monitor, Mic, Copy, Check, Users, ExternalLink, Printer } from "lucide-react";
 import { useStaff } from "../contexts/StaffContext";
 import { useTheme, type Theme } from "../contexts/ThemeContext";
 import { useClinicSettings } from "../contexts/ClinicSettingsContext";
