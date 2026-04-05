@@ -1030,9 +1030,9 @@ app.get('/api/admin/clinics', requireAuth, requireSuperAdmin, async (req, res) =
     const { rows } = await pool.query(`
       SELECT
         c.id, c.name, c.slug, c.status AS clinic_status, c.created_at,
-        s.plan, s.status, s.payment_provider,
+        s.plan, s.status,
         s.trial_ends_at, s.current_period_end,
-        s.stripe_customer_id, s.square_customer_id,
+        s.stripe_customer_id,
         u.email AS owner_email
       FROM clinics c
       LEFT JOIN subscriptions s ON s.clinic_id = c.id
