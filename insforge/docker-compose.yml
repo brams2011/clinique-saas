@@ -79,6 +79,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REFRESH_TOKEN: ${GOOGLE_REFRESH_TOKEN:-}
       GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-}
+      GMAIL_USER: ${GMAIL_USER:-}
     volumes:
       - storage_data:/data/storage
     depends_on:

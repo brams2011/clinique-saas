@@ -4,6 +4,9 @@
       "Read(//c/Users/Lemovo-Laptop/AppData/Local/Temp/claude/**)",
       "Bash(node:*)",
       "Bash(docker ps:*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Cinique-saas\\landing\\.next\\dev"
     ]
   }
 }

@@ -10,6 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const fs       = require('fs');
 const path     = require('path');
 const Stripe   = require('stripe');
+const { google } = require('googleapis');
 
 const PORT          = parseInt(process.env.PORT  || '7130');
 const JWT_SECRET    = process.env.JWT_SECRET     || 'insforge-dev-secret-change-in-prod';
@@ -35,7 +36,37 @@ const SMTP_PASS          = process.env.SMTP_PASS          || '';
 const GOOGLE_CLIENT_ID   = process.env.GOOGLE_CLIENT_ID   || '';
 const GOOGLE_CLIENT_SEC  = process.env.GOOGLE_CLIENT_SECRET || '';
 const GOOGLE_REFRESH_TOK = process.env.GOOGLE_REFRESH_TOKEN || '';
-const GMAIL_USER         = process.env.GOOGLE_CALENDAR_ID  || '';   // bddouk@gmail.com
+const GMAIL_USER         = process.env.GMAIL_USER || '';   // ex: bddouk@gmail.com
+const GOOGLE_CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || 'primary';
+
+// ─── Google Calendar helper ────────────────────────────────────────────────────
+function getGoogleCalendarClient() {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SEC || !GOOGLE_REFRESH_TOK) return null;
+  const auth = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SEC);
+  auth.setCredentials({ refresh_token: GOOGLE_REFRESH_TOK });
+  return google.calendar({ version: 'v3', auth });
+}
+
+async function createGoogleCalendarEvent(appt) {
+  const cal = getGoogleCalendarClient();
+  if (!cal) return null;
+  try {
+    const event = {
+      summary: appt.type || 'Rendez-vous',
+      description: appt.reason || '',
+      start: { dateTime: appt.start_time, timeZone: 'America/Toronto' },
+      end:   { dateTime: appt.end_time,   timeZone: 'America/Toronto' },
+    };
+    if (appt.is_virtual && appt.virtual_meeting_url) {
+      event.location = appt.virtual_meeting_url;
+    }
+    const result = await cal.events.insert({ calendarId: GOOGLE_CALENDAR_ID, resource: event });
+    return result.data.id;
+  } catch (e) {
+    console.error('Google Calendar createEvent:', e.message);
+    return null;
+  }
+}
 
 // Priorité : SMTP explicite → Gmail OAuth2 → pas d'envoi
 let mailer = null;
@@ -493,6 +524,16 @@ app.use('/api/database/records', requireAuth, async (req, res) => {
     const text  = await pgRes.text();
     const cr    = pgRes.headers.get('Content-Range');
     if (cr) res.setHeader('Content-Range', cr);
+
+    // Google Calendar — créer l'event après insertion d'un RDV
+    if (tableName === 'clinic_appointments' && req.method === 'POST' && pgRes.status === 201) {
+      try {
+        const inserted = JSON.parse(text);
+        const appt = Array.isArray(inserted) ? inserted[0] : inserted;
+        if (appt) createGoogleCalendarEvent(appt).catch(() => {});
+      } catch (_) {}
+    }
+
     return res.status(pgRes.status).type('json').send(text || (req.method === 'DELETE' ? '' : '[]'));
   } catch (e) {
     console.error('PostgREST proxy:', e.message);
