@@ -5,10 +5,12 @@ import { useAuth } from "../contexts/AuthContext";
 import {
   type Invoice,
   type InvoiceLigne,
+  type Patient,
   apiGetInvoice,
   apiCreateInvoice,
   apiUpdateInvoice,
   apiGetNextInvoiceNumber,
+  apiListPatients,
 } from "../lib/api";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -84,6 +86,8 @@ export default function InvoiceForm() {
   const [loading, setSaving_]  = useState(false);
   const [saving,  setSaving]   = useState(false);
   const [error,   setError]    = useState<string | null>(null);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatientId, setSelectedPatientId] = useState<string>("");
 
   // ── Champs ──
   const [numero,          setNumero]          = useState("");
@@ -110,6 +114,22 @@ export default function InvoiceForm() {
   const [assuranceCov,    setAssurance]       = useState(0);
   const [acompte,         setAcompte]         = useState(0);
 
+  // ── Chargement patients ──
+  useEffect(() => {
+    if (!token) return;
+    apiListPatients(token).then(setPatients).catch(() => {});
+  }, [token]);
+
+  function handlePatientSelect(patientId: string) {
+    setSelectedPatientId(patientId);
+    const p = patients.find((p) => p.id === patientId);
+    if (!p) return;
+    setPatientNom(`${p.first_name} ${p.last_name}`);
+    setPatientEmail(p.email || "");
+    setPatientTel(p.phone || "");
+    setPatientAdresse(p.address || "");
+  }
+
   // ── Chargement ──
   useEffect(() => {
     if (!token) return;
@@ -119,6 +139,7 @@ export default function InvoiceForm() {
         .then((inv) => {
           setNumero(inv.numero);
           setStatut(inv.statut);
+          if (inv.patient_id) setSelectedPatientId(inv.patient_id);
           setPatientNom(inv.patient_nom || "");
           setPatientRamq(inv.patient_ramq || "");
           setPatientDossier(inv.patient_dossier || "");
@@ -181,6 +202,7 @@ export default function InvoiceForm() {
     setSaving(true);
     const data: Partial<Invoice> = {
       numero, statut,
+      patient_id: selectedPatientId || null,
       patient_nom: patientNom || null,
       patient_ramq: patientRamq || null,
       patient_dossier: patientDossier || null,
@@ -248,6 +270,14 @@ export default function InvoiceForm() {
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <SectionTitle title="1. Informations patient" />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Sélectionner un patient">
+              <select className={INPUT} value={selectedPatientId} onChange={(e) => handlePatientSelect(e.target.value)}>
+                <option value="">-- Choisir un patient --</option>
+                {patients.map((p) => (
+                  <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>
+                ))}
+              </select>
+            </Field>
             <Field label="Nom complet" required>
               <input className={INPUT} value={patientNom} onChange={(e) => setPatientNom(e.target.value)} placeholder="Nom Prénom" />
             </Field>
