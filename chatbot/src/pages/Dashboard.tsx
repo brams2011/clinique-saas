@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Users, Calendar, CheckCircle, Stethoscope,
   Plus, ArrowRight, Clock, UserPlus, CalendarPlus,
+  TrendingUp, Activity,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useStaff } from "../contexts/StaffContext";
@@ -25,37 +26,49 @@ const AVATAR_COLORS = [
   "from-cyan-500 to-sky-600",
 ];
 
-const STATUS_BORDER: Record<string, string> = {
-  scheduled: "border-l-blue-400",
-  confirmed:  "border-l-emerald-400",
-  completed:  "border-l-gray-400",
-  cancelled:  "border-l-red-400",
-  no_show:    "border-l-amber-400",
+const STATUS_CONFIG: Record<string, { bar: string; dot: string }> = {
+  scheduled: { bar: "bg-blue-400",    dot: "bg-blue-400" },
+  confirmed:  { bar: "bg-emerald-400", dot: "bg-emerald-400" },
+  completed:  { bar: "bg-gray-300",   dot: "bg-gray-400" },
+  cancelled:  { bar: "bg-red-400",    dot: "bg-red-400" },
+  no_show:    { bar: "bg-amber-400",  dot: "bg-amber-400" },
 };
 
 function StatCard({
-  icon: Icon, label, value, sub, gradient, decorationColor,
+  icon: Icon, label, value, sub, color,
 }: {
   icon: React.ElementType;
   label: string;
   value: number | string;
   sub?: string;
-  gradient: string;
-  decorationColor: string;
+  color: { bg: string; icon: string; text: string; ring: string };
 }) {
   return (
-    <div className={`relative overflow-hidden rounded-2xl p-5 text-white bg-gradient-to-br ${gradient}`}>
-      {/* Decorative circles */}
-      <div className={`absolute -top-4 -right-4 w-24 h-24 rounded-full opacity-20 ${decorationColor}`} />
-      <div className={`absolute -bottom-6 -right-2 w-16 h-16 rounded-full opacity-10 ${decorationColor}`} />
-      <div className="relative">
-        <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center mb-3">
-          <Icon className="w-5 h-5 text-white" />
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col gap-4 hover:shadow-md transition-shadow">
+      <div className="flex items-center justify-between">
+        <div className={`w-10 h-10 ${color.bg} rounded-xl flex items-center justify-center ring-4 ${color.ring}`}>
+          <Icon className={`w-5 h-5 ${color.icon}`} />
         </div>
-        <p className="text-3xl font-bold tracking-tight">{value}</p>
-        <p className="text-sm font-medium text-white/80 mt-0.5">{label}</p>
-        {sub && <p className="text-xs text-white/60 mt-1">{sub}</p>}
+        <TrendingUp className="w-4 h-4 text-gray-200" />
       </div>
+      <div>
+        <p className="text-3xl font-bold text-gray-900 tracking-tight">{value}</p>
+        <p className={`text-sm font-medium ${color.text} mt-0.5`}>{label}</p>
+        {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+function SkeletonRow() {
+  return (
+    <div className="flex items-center gap-4 px-5 py-4 animate-pulse">
+      <div className="w-12 h-8 bg-gray-100 rounded-lg" />
+      <div className="flex-1 space-y-2">
+        <div className="h-3 bg-gray-100 rounded w-1/3" />
+        <div className="h-2.5 bg-gray-100 rounded w-1/2" />
+      </div>
+      <div className="w-16 h-5 bg-gray-100 rounded-full" />
     </div>
   );
 }
@@ -95,7 +108,9 @@ export default function Dashboard() {
   }, [token]);
 
   const confirmedToday  = todayAppts.filter((a) => a.status === "confirmed").length;
+  const completedToday  = todayAppts.filter((a) => a.status === "completed").length;
   const scheduledToday  = todayAppts.filter((a) => a.status === "scheduled").length;
+  const progressPct     = todayAppts.length > 0 ? Math.round((completedToday / todayAppts.length) * 100) : 0;
   const firstName = staff?.first_name ?? "Docteur";
 
   function formatTime(iso: string) {
@@ -104,7 +119,7 @@ export default function Dashboard() {
 
   function formatDateFull(iso: string) {
     return new Date(iso).toLocaleDateString("fr-CA", {
-      weekday: "long", year: "numeric", month: "long", day: "numeric",
+      weekday: "long", month: "long", day: "numeric",
     });
   }
 
@@ -118,27 +133,52 @@ export default function Dashboard() {
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
 
-      {/* ── Gradient header ── */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-700 via-indigo-600 to-violet-600 p-6 text-white">
-        <div className="absolute -top-8 -right-8 w-48 h-48 bg-white/5 rounded-full" />
-        <div className="absolute -bottom-10 right-24 w-32 h-32 bg-white/5 rounded-full" />
-        <div className="relative flex items-center justify-between flex-wrap gap-4">
+      {/* ── Header ── */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-900 via-indigo-800 to-violet-800 p-6 text-white">
+        {/* decorative blobs */}
+        <div className="absolute top-0 right-0 w-72 h-72 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/4" />
+        <div className="absolute bottom-0 left-1/2 w-48 h-48 bg-violet-400/10 rounded-full translate-y-1/2" />
+        <div className="absolute top-4 right-48 w-16 h-16 bg-indigo-400/20 rounded-full" />
+
+        <div className="relative flex items-start justify-between flex-wrap gap-4">
           <div>
-            <p className="text-indigo-200 text-sm font-medium capitalize">{formatDateFull(new Date().toISOString())}</p>
-            <h1 className="text-2xl font-bold mt-1">{getHourGreeting()}, {firstName} 👋</h1>
-            <p className="text-indigo-200 text-sm mt-1">
+            <p className="text-indigo-300 text-xs font-medium uppercase tracking-wider mb-1 capitalize">
+              {formatDateFull(new Date().toISOString())}
+            </p>
+            <h1 className="text-2xl font-bold">{getHourGreeting()}, {firstName} 👋</h1>
+            <p className="text-indigo-200 text-sm mt-1.5">
               {todayAppts.length === 0
-                ? "Aucun rendez-vous aujourd'hui"
-                : `${todayAppts.length} rendez-vous · ${confirmedToday} confirmé${confirmedToday !== 1 ? "s" : ""}`}
+                ? "Aucun rendez-vous planifié aujourd'hui"
+                : `${todayAppts.length} rendez-vous planifiés · ${confirmedToday} confirmé${confirmedToday !== 1 ? "s" : ""}`}
             </p>
           </div>
-          <Link
-            to="/appointments/new"
-            className="flex items-center gap-2 bg-white text-indigo-700 font-semibold px-4 py-2.5 rounded-xl hover:bg-indigo-50 transition-colors text-sm shadow-lg"
-          >
-            <Plus className="w-4 h-4" />
-            Nouveau RDV
-          </Link>
+
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Progress pill */}
+            {todayAppts.length > 0 && (
+              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl px-4 py-3 min-w-[140px]">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-indigo-200 font-medium">Progression</span>
+                  <span className="text-xs font-bold text-white">{progressPct}%</span>
+                </div>
+                <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-400 rounded-full transition-all duration-700"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+                <p className="text-xs text-indigo-300 mt-1.5">{completedToday}/{todayAppts.length} terminés</p>
+              </div>
+            )}
+
+            <Link
+              to="/appointments/new"
+              className="flex items-center gap-2 bg-white text-indigo-700 font-semibold px-4 py-2.5 rounded-xl hover:bg-indigo-50 transition-colors text-sm shadow-lg shadow-indigo-900/30"
+            >
+              <Plus className="w-4 h-4" />
+              Nouveau RDV
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -148,142 +188,182 @@ export default function Dashboard() {
           icon={Users}
           label="Patients actifs"
           value={patients.length}
-          gradient="from-blue-500 to-blue-700"
-          decorationColor="bg-blue-300"
+          color={{ bg: "bg-blue-50", icon: "text-blue-600", text: "text-blue-600", ring: "ring-blue-50" }}
         />
         <StatCard
           icon={Calendar}
           label="RDV aujourd'hui"
           value={todayAppts.length}
           sub={scheduledToday > 0 ? `${scheduledToday} en attente` : undefined}
-          gradient="from-violet-500 to-violet-700"
-          decorationColor="bg-violet-300"
+          color={{ bg: "bg-violet-50", icon: "text-violet-600", text: "text-violet-600", ring: "ring-violet-50" }}
         />
         <StatCard
           icon={CheckCircle}
           label="Confirmés"
           value={confirmedToday}
-          gradient="from-emerald-500 to-emerald-700"
-          decorationColor="bg-emerald-300"
+          color={{ bg: "bg-emerald-50", icon: "text-emerald-600", text: "text-emerald-600", ring: "ring-emerald-50" }}
         />
         <StatCard
           icon={Stethoscope}
-          label="Praticiens actifs"
+          label="Praticiens"
           value={staffList.length}
-          gradient="from-orange-500 to-amber-600"
-          decorationColor="bg-orange-300"
+          color={{ bg: "bg-amber-50", icon: "text-amber-600", text: "text-amber-600", ring: "ring-amber-50" }}
         />
       </div>
 
-      {/* ── Main content ── */}
+      {/* ── Main grid ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        {/* Today's appointments */}
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        {/* Appointments list */}
+        <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-violet-100 rounded-lg flex items-center justify-center">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 bg-violet-50 rounded-lg flex items-center justify-center">
                 <Clock className="w-4 h-4 text-violet-600" />
               </div>
-              <h2 className="font-semibold text-gray-800">Rendez-vous d'aujourd'hui</h2>
+              <div>
+                <h2 className="font-semibold text-gray-900 text-sm">Rendez-vous d'aujourd'hui</h2>
+                {!loading && todayAppts.length > 0 && (
+                  <p className="text-xs text-gray-400">{todayAppts.length} au total</p>
+                )}
+              </div>
             </div>
             <Link
               to="/appointments"
-              className="text-xs font-medium text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+              className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition-colors"
             >
               Voir tous <ArrowRight className="w-3 h-3" />
             </Link>
           </div>
 
-          {loading ? (
-            <div className="flex justify-center py-14">
-              <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-            </div>
-          ) : todayAppts.length === 0 ? (
-            <div className="py-14 text-center">
-              <Calendar className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-              <p className="text-gray-400 text-sm">Aucun rendez-vous aujourd'hui</p>
-              <Link
-                to="/appointments/new"
-                className="inline-flex items-center gap-1.5 mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-700"
-              >
-                <Plus className="w-3.5 h-3.5" /> Créer un RDV
-              </Link>
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-50">
-              {todayAppts.map((appt) => {
-                const patient = patientMap[appt.patient_id];
-                const practitioner = staffMap[appt.practitioner_id];
-                const borderClass = STATUS_BORDER[appt.status] ?? "border-l-gray-300";
-                return (
-                  <div
-                    key={appt.id}
-                    className={`flex items-center gap-4 px-5 py-3.5 border-l-4 ${borderClass} hover:bg-gray-50/50 transition-colors`}
-                  >
-                    <div className="text-right min-w-[56px]">
-                      <p className="text-sm font-bold text-gray-800">{formatTime(appt.start_time)}</p>
-                      <p className="text-xs text-gray-400">{formatTime(appt.end_time)}</p>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">
-                        {patient ? `${patient.first_name} ${patient.last_name}` : "—"}
-                      </p>
-                      <p className="text-xs text-gray-500 truncate">
-                        {practitioner ? `Dr. ${practitioner.last_name}` : "—"} · {appt.type}
-                        {appt.reason ? ` · ${appt.reason}` : ""}
-                      </p>
-                    </div>
-                    <StatusBadge status={appt.status} />
-                  </div>
-                );
-              })}
+          {/* Status legend */}
+          {!loading && todayAppts.length > 0 && (
+            <div className="flex items-center gap-4 px-5 py-2.5 bg-gray-50/70 border-b border-gray-100">
+              {Object.entries({
+                scheduled: "En attente",
+                confirmed:  "Confirmé",
+                completed:  "Terminé",
+                cancelled:  "Annulé",
+              }).map(([key, label]) => (
+                <div key={key} className="flex items-center gap-1.5">
+                  <div className={`w-2 h-2 rounded-full ${STATUS_CONFIG[key]?.dot ?? "bg-gray-300"}`} />
+                  <span className="text-xs text-gray-500">{label}</span>
+                </div>
+              ))}
             </div>
           )}
+
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="divide-y divide-gray-50">
+                {[...Array(4)].map((_, i) => <SkeletonRow key={i} />)}
+              </div>
+            ) : todayAppts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 px-6">
+                <div className="w-14 h-14 bg-gray-50 rounded-2xl flex items-center justify-center mb-4">
+                  <Calendar className="w-7 h-7 text-gray-300" />
+                </div>
+                <p className="text-gray-500 text-sm font-medium">Aucun rendez-vous aujourd'hui</p>
+                <p className="text-gray-400 text-xs mt-1 text-center">Planifiez un nouveau RDV pour commencer</p>
+                <Link
+                  to="/appointments/new"
+                  className="inline-flex items-center gap-2 mt-4 text-xs font-semibold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded-xl transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Créer un RDV
+                </Link>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {todayAppts.map((appt) => {
+                  const patient     = patientMap[appt.patient_id];
+                  const practitioner = staffMap[appt.practitioner_id];
+                  const barColor    = STATUS_CONFIG[appt.status]?.bar ?? "bg-gray-300";
+                  return (
+                    <div
+                      key={appt.id}
+                      className="flex items-center gap-4 px-5 py-3.5 hover:bg-gray-50/70 transition-colors group"
+                    >
+                      {/* Time */}
+                      <div className="text-right min-w-[52px]">
+                        <p className="text-sm font-bold text-gray-800">{formatTime(appt.start_time)}</p>
+                        <p className="text-xs text-gray-400">{formatTime(appt.end_time)}</p>
+                      </div>
+
+                      {/* Color bar */}
+                      <div className={`w-1 h-10 rounded-full flex-shrink-0 ${barColor}`} />
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">
+                          {patient ? `${patient.first_name} ${patient.last_name}` : "—"}
+                        </p>
+                        <p className="text-xs text-gray-400 truncate">
+                          {practitioner ? `Dr. ${practitioner.last_name}` : "—"}
+                          {appt.type ? ` · ${appt.type}` : ""}
+                        </p>
+                      </div>
+
+                      <StatusBadge status={appt.status} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right column */}
-        <div className="space-y-4">
+        <div className="space-y-5">
 
           {/* Quick actions */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h2 className="font-semibold text-gray-800 mb-3">Actions rapides</h2>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 bg-gray-50 rounded-lg flex items-center justify-center">
+                <Activity className="w-4 h-4 text-gray-500" />
+              </div>
+              <h2 className="font-semibold text-gray-900 text-sm">Actions rapides</h2>
+            </div>
             <div className="space-y-2">
               <Link
                 to="/appointments/new"
                 className="flex items-center gap-3 p-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 transition-colors group"
               >
-                <div className="w-9 h-9 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-700">
+                <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-700 transition-colors shadow-sm shadow-indigo-200">
                   <CalendarPlus className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-indigo-900">Nouveau rendez-vous</p>
-                  <p className="text-xs text-indigo-500">Planifier un RDV patient</p>
+                  <p className="text-sm font-semibold text-indigo-900">Nouveau rendez-vous</p>
+                  <p className="text-xs text-indigo-400">Planifier un RDV patient</p>
                 </div>
+                <ArrowRight className="w-3.5 h-3.5 text-indigo-300 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
               </Link>
+
               <Link
                 to="/patients/new"
                 className="flex items-center gap-3 p-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 transition-colors group"
               >
-                <div className="w-9 h-9 bg-emerald-600 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-700">
+                <div className="w-9 h-9 bg-emerald-600 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-700 transition-colors shadow-sm shadow-emerald-200">
                   <UserPlus className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-emerald-900">Nouveau patient</p>
-                  <p className="text-xs text-emerald-600">Enregistrer un nouveau dossier</p>
+                  <p className="text-sm font-semibold text-emerald-900">Nouveau patient</p>
+                  <p className="text-xs text-emerald-400">Enregistrer un dossier</p>
                 </div>
+                <ArrowRight className="w-3.5 h-3.5 text-emerald-300 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
               </Link>
+
               <Link
                 to="/appointments"
                 className="flex items-center gap-3 p-3 rounded-xl bg-violet-50 hover:bg-violet-100 transition-colors group"
               >
-                <div className="w-9 h-9 bg-violet-600 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-violet-700">
+                <div className="w-9 h-9 bg-violet-600 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-violet-700 transition-colors shadow-sm shadow-violet-200">
                   <Calendar className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-violet-900">Tous les RDV</p>
-                  <p className="text-xs text-violet-500">Gérer les rendez-vous</p>
+                  <p className="text-sm font-semibold text-violet-900">Agenda complet</p>
+                  <p className="text-xs text-violet-400">Gérer les rendez-vous</p>
                 </div>
+                <ArrowRight className="w-3.5 h-3.5 text-violet-300 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
               </Link>
             </div>
           </div>
@@ -291,50 +371,64 @@ export default function Dashboard() {
           {/* Recent patients */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 bg-blue-100 rounded-lg flex items-center justify-center">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
                   <Users className="w-4 h-4 text-blue-600" />
                 </div>
-                <h2 className="font-semibold text-gray-800">Patients récents</h2>
+                <h2 className="font-semibold text-gray-900 text-sm">Patients récents</h2>
               </div>
-              <Link to="/patients/new" className="text-xs text-indigo-600 hover:text-indigo-700 font-medium">
+              <Link
+                to="/patients/new"
+                className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition-colors"
+              >
                 + Ajouter
               </Link>
             </div>
 
             {loading ? (
-              <div className="flex justify-center py-10">
-                <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+              <div className="divide-y divide-gray-50">
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 px-5 py-3 animate-pulse">
+                    <div className="w-8 h-8 bg-gray-100 rounded-full" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3 bg-gray-100 rounded w-2/3" />
+                      <div className="h-2.5 bg-gray-100 rounded w-1/2" />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : patients.length === 0 ? (
-              <div className="py-10 text-center text-gray-400 text-sm">Aucun patient</div>
+              <div className="py-10 text-center text-gray-400 text-sm">Aucun patient enregistré</div>
             ) : (
               <div className="divide-y divide-gray-50">
                 {patients.slice(0, 5).map((p, i) => (
                   <Link
                     key={p.id}
                     to={`/patients/${p.id}`}
-                    className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors"
+                    className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors group"
                   >
-                    <div className={`w-8 h-8 bg-gradient-to-br ${AVATAR_COLORS[i % AVATAR_COLORS.length]} rounded-full flex items-center justify-center flex-shrink-0`}>
+                    <div className={`w-8 h-8 bg-gradient-to-br ${AVATAR_COLORS[i % AVATAR_COLORS.length]} rounded-full flex items-center justify-center flex-shrink-0 shadow-sm`}>
                       <span className="text-xs font-bold text-white">
-                        {p.first_name[0]}{p.last_name[0]}
+                        {p.first_name?.[0]}{p.last_name?.[0]}
                       </span>
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-gray-800 truncate">{p.first_name} {p.last_name}</p>
                       <p className="text-xs text-gray-400 truncate">{p.phone ?? p.email ?? "—"}</p>
                     </div>
-                    <ArrowRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+                    <ArrowRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
                   </Link>
                 ))}
               </div>
             )}
 
             {patients.length > 0 && (
-              <div className="px-5 py-3 border-t border-gray-100">
-                <Link to="/patients" className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 font-medium">
-                  Voir tous les patients <ArrowRight className="w-3 h-3" />
+              <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50">
+                <Link
+                  to="/patients"
+                  className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                >
+                  Voir tous les {patients.length} patients <ArrowRight className="w-3 h-3" />
                 </Link>
               </div>
             )}
