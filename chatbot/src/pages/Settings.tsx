@@ -369,8 +369,8 @@ export default function Settings() {
         </div>
       )}
 
-      {/* Agent vocal — admin seulement */}
-      {isAdmin && <VoiceAgentSection
+      {/* Agent vocal — admin + Enterprise seulement */}
+      {isAdmin && hasPlan("enterprise") && <VoiceAgentSection
         baseUrl={form.voice_agent_base_url}
         agentId={form.elevenlabs_agent_id}
         onBaseUrlChange={(v) => setForm((f) => ({ ...f, voice_agent_base_url: v }))}

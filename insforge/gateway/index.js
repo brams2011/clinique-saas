@@ -501,6 +501,58 @@ app.use('/api/database/records', requireAuth, async (req, res) => {
     qs = qs + sep + `clinic_id=eq.${clinicId}`;
   }
 
+  // Pour clinic_invoices POST : générer le numero atomiquement et insérer via pool
+  if (tableName === 'clinic_invoices' && req.method === 'POST') {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lockId = Number(BigInt('0x' + clinicId.replace(/-/g,'').slice(0,15)) % BigInt(2147483647));
+      await client.query('SELECT pg_advisory_xact_lock($1)', [lockId]);
+      const year = new Date().getFullYear();
+      const { rows: seqRows } = await client.query(
+        `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero,'-',3) AS INTEGER)),0)+1 AS next_seq
+         FROM clinic_invoices WHERE clinic_id=$1 AND numero LIKE $2`,
+        [clinicId, `INV-${year}-%`]
+      );
+      const numero = `INV-${year}-${String(seqRows[0].next_seq).padStart(4,'0')}`;
+      const d = Array.isArray(req.body) ? req.body[0] : (req.body || {});
+      const { rows } = await client.query(
+        `INSERT INTO clinic_invoices (
+          clinic_id,numero,patient_id,appointment_id,statut,
+          patient_nom,patient_ramq,patient_dossier,patient_telephone,patient_email,patient_adresse,
+          medecin_nom,medecin_licence,medecin_specialite,
+          date_visite,date_echeance,assureur,no_police,no_reclamation,
+          lignes,sous_total,remises,ramq_couverture,assurance_couverture,
+          tps,tvq,acompte,total,notes,diagnostic_cim10
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+          $21,$22,$23,$24,$25,$26,$27,$28,$29,$30
+        ) RETURNING *`,
+        [
+          clinicId, numero,
+          d.patient_id||null, d.appointment_id||null, d.statut||'en_attente',
+          d.patient_nom||null, d.patient_ramq||null, d.patient_dossier||null,
+          d.patient_telephone||null, d.patient_email||null, d.patient_adresse||null,
+          d.medecin_nom||null, d.medecin_licence||null, d.medecin_specialite||null,
+          d.date_visite||null, d.date_echeance||null,
+          d.assureur||null, d.no_police||null, d.no_reclamation||null,
+          JSON.stringify(d.lignes||[]),
+          d.sous_total||0, d.remises||0, d.ramq_couverture||0, d.assurance_couverture||0,
+          d.tps||0, d.tvq||0, d.acompte||0, d.total||0,
+          d.notes||null, d.diagnostic_cim10||null,
+        ]
+      );
+      await client.query('COMMIT');
+      return res.status(201).json(rows[0]);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      console.error('Invoice insert:', e.message);
+      return res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  }
+
   // For POST (insert), inject clinic_id into the body
   let body = req.body;
   if (isClinicScoped && clinicId && req.method === 'POST' && body && typeof body === 'object') {
@@ -547,10 +599,11 @@ app.get('/api/facturation/next-number', requireAuth, requireFeature('billing'), 
   try {
     const year = new Date().getFullYear();
     const { rows } = await pool.query(
-      "SELECT COUNT(*) FROM clinic_invoices WHERE clinic_id=$1 AND numero LIKE $2",
+      `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 3) AS INTEGER)), 0) + 1 AS next_seq
+       FROM clinic_invoices WHERE clinic_id=$1 AND numero LIKE $2`,
       [req.clinicId, `INV-${year}-%`]
     );
-    const seq = parseInt(rows[0].count) + 1;
+    const seq = rows[0].next_seq;
     return res.json({ numero: `INV-${year}-${String(seq).padStart(4, '0')}` });
   } catch (e) {
     console.error('Next invoice number:', e.message);
